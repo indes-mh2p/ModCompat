@@ -128,7 +128,7 @@
     </div>
   </header>
 
-    <section class="verdict idle" id="verdict">
+ <section class="verdict idle" id="verdict">
     <span class="pill" id="verdict-pill">Waiting</span>
     <span class="msg" id="verdict-msg">Load both packages to compare.</span>
   </section>
@@ -173,7 +173,7 @@
   // Same rules as jar_overlap.py.
   function className(entry, collapseInner) {
     if (!entry.endsWith('.class') || entry.startsWith('META-INF/')) return null;
-    let name = entry.slice(0, -6).replace(/\//g, '.');
+    let name = entry.slice(0, -6).replace(/[\\/]/g, '.');
     if (name.endsWith('module-info') || name.endsWith('package-info')) return null;
     if (collapseInner && name.includes('$')) name = name.split('$')[0];
     return name;
@@ -201,7 +201,7 @@
     for (const e of Object.keys(outer.files)) {
       const f = outer.files[e];
       if (f.dir) continue;
-      const base = e.split('/').pop();
+      const base = e.split(/[\\/]/).pop();   // zips built on Windows may use backslashes
       if (!base || base.includes('.')) continue;
       const head = await f.async('uint8array');
       if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) scripts.push({ name: base, path: e });
@@ -401,11 +401,12 @@
     let shown = 0, total = 0;
     zone.querySelectorAll('.jar').forEach(d => {
       let jarShown = 0;
+      const isScripts = d.classList.contains('scripts');
       d.querySelectorAll('li').forEach(li => {
-        total++;
+        if (!isScripts) total++;
         const hit = !q || li.textContent.toLowerCase().includes(q);
         li.hidden = !hit;
-        if (hit) { shown++; jarShown++; }
+        if (hit) { if (!isScripts) shown++; jarShown++; }
       });
       d.hidden = q && jarShown === 0;
       if (q && jarShown) d.open = true;
