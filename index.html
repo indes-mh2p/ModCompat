@@ -1,0 +1,388 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Override Conflict Checker</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: two drop zones side by side, verdict band beneath, class lists below each zone. */
+  :root {
+    --bg: #f6f7f4;
+    --surface: #ffffff;
+    --fg: #1d2420;
+    --muted: #66706a;
+    --line: #d5dad4;
+    --accent: #1f5f8b;
+    --accent-soft: #e4eef6;
+    --ok: #2d7a46;
+    --ok-soft: #e2f1e6;
+    --bad: #b2362b;
+    --bad-soft: #f8e4e1;
+    --warn: #9a6a0c;
+    --warn-soft: #f8efd6;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161a18; --surface: #1f2522; --fg: #e6e9e5; --muted: #99a39c; --line: #343c38;
+      --accent: #6fb0e0; --accent-soft: #223544; --ok: #6cc98a; --ok-soft: #1f3528;
+      --bad: #ef8a7e; --bad-soft: #43241f; --warn: #e0b55a; --warn-soft: #3d3119;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161a18; --surface: #1f2522; --fg: #e6e9e5; --muted: #99a39c; --line: #343c38;
+    --accent: #6fb0e0; --accent-soft: #223544; --ok: #6cc98a; --ok-soft: #1f3528;
+    --bad: #ef8a7e; --bad-soft: #43241f; --warn: #e0b55a; --warn-soft: #3d3119;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--sans);
+    font-size: 14px; line-height: 1.5;
+    padding-block: 28px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 1100px; margin: 0 auto; display: grid; gap: 20px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; text-wrap: balance; }
+  .lede { color: var(--muted); margin: 4px 0 0; max-width: 65ch; }
+  header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-end; }
+  .opts { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; color: var(--muted); }
+  .opts label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+
+  .zones { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 700px) { .zones { grid-template-columns: 1fr; } }
+  .zone { min-width: 0; display: grid; gap: 12px; align-content: start; }
+
+  .drop {
+    border: 2px dashed var(--line); border-radius: 10px; background: var(--surface);
+    padding: 26px 18px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+    display: grid; gap: 4px;
+  }
+  .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop.loaded { border-style: solid; text-align: left; padding: 14px 18px; }
+  .drop .slot { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .drop .name { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+  .drop .hint { color: var(--muted); }
+  .drop .stats { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .drop input { display: none; }
+
+  .verdict {
+    border-radius: 10px; padding: 14px 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--line);
+  }
+  .verdict .pill {
+    font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .verdict.idle .pill { background: var(--line); color: var(--muted); }
+  .verdict.ok { border-color: var(--ok); } .verdict.ok .pill { background: var(--ok-soft); color: var(--ok); }
+  .verdict.bad { border-color: var(--bad); } .verdict.bad .pill { background: var(--bad-soft); color: var(--bad); }
+  .verdict .msg { flex: 1 1 200px; min-width: 0; }
+
+  .conflicts { display: grid; gap: 10px; }
+  .conflict-group { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .conflict-group h2 { font-size: 13px; font-weight: 600; margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+  .conflict-group h2 .count { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 500; }
+  .conflict-group.cross h2 { border-left: 4px solid var(--bad); }
+  .conflict-group.intra h2 { border-left: 4px solid var(--warn); }
+  .conflict-group ul { list-style: none; margin: 0; padding: 6px 0; max-height: 360px; overflow: auto; }
+  .conflict-group li { padding: 5px 16px; display: grid; gap: 2px; }
+  .conflict-group li + li { border-top: 1px solid var(--line); }
+  .cls { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+  .where { color: var(--muted); font-size: 12px; font-family: var(--mono); overflow-wrap: anywhere; }
+
+  .list { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .list-head { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .list-head input {
+    flex: 1; min-width: 0; font: inherit; font-family: var(--mono); font-size: 12px; padding: 5px 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+  }
+  .list-head .n { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .jar { border-top: 1px solid var(--line); }
+  .jar:first-child { border-top: 0; }
+  .jar summary { cursor: pointer; padding: 7px 12px; font-family: var(--mono); font-size: 12px; display: flex; gap: 8px; overflow-wrap: anywhere; }
+  .jar summary .n { color: var(--muted); margin-left: auto; white-space: nowrap; }
+  .jar ul { list-style: none; margin: 0; padding: 0 0 6px; max-height: 320px; overflow: auto; }
+  .jar li { padding: 2px 12px 2px 28px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  .jar li.hit { color: var(--bad); font-weight: 500; }
+  .jar li.hit::before { content: "✕ "; }
+  .jar li.dup { color: var(--warn); font-weight: 500; }
+  .jar li.dup::before { content: "! "; }
+  .empty { color: var(--muted); padding: 10px 12px; }
+  .err { color: var(--bad); }
+  .legend { color: var(--muted); font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .legend .k { font-family: var(--mono); }
+  .legend .bad { color: var(--bad); } .legend .warn { color: var(--warn); }
+</style>
+
+<main>
+  <header>
+    <div>
+      <h1>Override Conflict Checker</h1>
+      <p class="lede">Drop an update zip (or a single jar) in each box. Every jar inside is opened right here in your browser and its classes are compared. Nothing is uploaded.</p>
+    </div>
+    <div class="opts">
+      <label><input type="checkbox" id="opt-inner"> Treat inner classes (<span class="k">Foo$Bar</span>) separately</label>
+    </div>
+  </header>
+
+  <section class="verdict idle" id="verdict">
+    <span class="pill" id="verdict-pill">Waiting</span>
+    <span class="msg" id="verdict-msg">Load both packages to compare.</span>
+  </section>
+
+  <section class="conflicts" id="conflicts" hidden></section>
+
+  <section class="zones">
+    <div class="zone" data-slot="0">
+      <div class="drop" tabindex="0" role="button" aria-label="Drop package A">
+        <span class="slot">Package A</span>
+        <span class="name">Drop a .zip or .jar here</span>
+        <span class="hint">or click to choose a file</span>
+        <input type="file" accept=".zip,.jar,application/zip,application/java-archive">
+      </div>
+      <div class="list" hidden>
+        <div class="list-head"><input type="search" placeholder="filter classes" aria-label="Filter classes in package A"><span class="n"></span></div>
+        <div class="jars"></div>
+      </div>
+    </div>
+    <div class="zone" data-slot="1">
+      <div class="drop" tabindex="0" role="button" aria-label="Drop package B">
+        <span class="slot">Package B</span>
+        <span class="name">Drop a .zip or .jar here</span>
+        <span class="hint">or click to choose a file</span>
+        <input type="file" accept=".zip,.jar,application/zip,application/java-archive">
+      </div>
+      <div class="list" hidden>
+        <div class="list-head"><input type="search" placeholder="filter classes" aria-label="Filter classes in package B"><span class="n"></span></div>
+        <div class="jars"></div>
+      </div>
+    </div>
+  </section>
+
+  <p class="legend">
+    <span><span class="k bad">✕</span> implemented in both packages</span>
+    <span><span class="k warn">!</span> implemented by two jars in the same package</span>
+  </p>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(function () {
+  // Same rules as jar_overlap.py.
+  function className(entry, collapseInner) {
+    if (!entry.endsWith('.class') || entry.startsWith('META-INF/')) return null;
+    let name = entry.slice(0, -6).replace(/\//g, '.');
+    if (name.endsWith('module-info') || name.endsWith('package-info')) return null;
+    if (collapseInner && name.includes('$')) name = name.split('$')[0];
+    return name;
+  }
+
+  // pkg = { name, jars: { jarPath: Set<className> } , error? }
+  async function readPackage(file) {
+    const outer = await JSZip.loadAsync(file);
+    const jars = {};
+    if (/\.jar$/i.test(file.name)) {
+      jars[file.name] = Object.keys(outer.files).filter(e => !outer.files[e].dir);
+      return { name: file.name, entries: jars };
+    }
+    const jarEntries = Object.keys(outer.files).filter(e => !outer.files[e].dir && /\.jar$/i.test(e));
+    for (const je of jarEntries) {
+      try {
+        const inner = await JSZip.loadAsync(await outer.file(je).async('uint8array'));
+        jars[je] = Object.keys(inner.files).filter(e => !inner.files[e].dir);
+      } catch (e) {
+        jars[je] = null; // not a valid jar
+      }
+    }
+    return { name: file.name, entries: jars, noJars: jarEntries.length === 0 };
+  }
+
+  // Resolve raw entries into class sets under the current inner-class option.
+  function classify(pkg, collapseInner) {
+    const jars = {};           // jarPath -> sorted class array
+    const owners = new Map();  // className -> [jarPath]
+    for (const [jar, entries] of Object.entries(pkg.entries)) {
+      if (!entries) { jars[jar] = null; continue; }
+      const set = new Set();
+      for (const e of entries) { const n = className(e, collapseInner); if (n) set.add(n); }
+      jars[jar] = [...set].sort();
+      for (const n of set) { if (!owners.has(n)) owners.set(n, []); owners.get(n).push(jar); }
+    }
+    return { jars, owners };
+  }
+
+  const slots = [null, null];      // raw packages
+  const zones = [...document.querySelectorAll('.zone')];
+  const optInner = document.getElementById('opt-inner');
+  const verdict = document.getElementById('verdict');
+  const verdictPill = document.getElementById('verdict-pill');
+  const verdictMsg = document.getElementById('verdict-msg');
+  const conflictsEl = document.getElementById('conflicts');
+
+  zones.forEach((zone, i) => {
+    const drop = zone.querySelector('.drop');
+    const input = zone.querySelector('input[type=file]');
+    const filter = zone.querySelector('input[type=search]');
+    filter.id = 'filter-' + i;
+    input.id = 'file-' + i;
+
+    drop.addEventListener('click', () => input.click());
+    drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+    input.addEventListener('change', () => { if (input.files[0]) load(i, input.files[0]); input.value = ''; });
+    ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+    drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) load(i, f); });
+    filter.addEventListener('input', () => applyFilter(i));
+  });
+  optInner.addEventListener('change', render);
+
+  async function load(i, file) {
+    const drop = zones[i].querySelector('.drop');
+    drop.classList.add('loaded');
+    drop.querySelector('.name').textContent = file.name;
+    drop.querySelector('.hint').textContent = 'Reading…';
+    drop.querySelector('.hint').classList.remove('err');
+    slots[i] = null;
+    try {
+      slots[i] = await readPackage(file);
+    } catch (e) {
+      slots[i] = { name: file.name, entries: {}, error: 'Could not open this file as a zip archive.' };
+    }
+    render();
+  }
+
+  function render() {
+    const collapse = !optInner.checked;
+    const resolved = slots.map(p => p ? classify(p, collapse) : null);
+
+    // cross-package conflicts
+    const cross = [];
+    if (resolved[0] && resolved[1]) {
+      for (const [n, jarsA] of resolved[0].owners) {
+        if (resolved[1].owners.has(n)) cross.push({ cls: n, a: jarsA, b: resolved[1].owners.get(n) });
+      }
+      cross.sort((x, y) => x.cls.localeCompare(y.cls));
+    }
+    // intra-package conflicts
+    const intra = resolved.map(r => {
+      if (!r) return [];
+      return [...r.owners].filter(([, js]) => js.length > 1).map(([cls, js]) => ({ cls, jars: js })).sort((x, y) => x.cls.localeCompare(y.cls));
+    });
+
+    // per-package lists
+    resolved.forEach((r, i) => {
+      const pkg = slots[i];
+      const zone = zones[i];
+      const list = zone.querySelector('.list');
+      const hint = zone.querySelector('.drop .hint');
+      const jarsEl = zone.querySelector('.jars');
+      if (!r) { list.hidden = true; return; }
+      if (pkg.error) { hint.textContent = pkg.error; hint.classList.add('err'); list.hidden = true; return; }
+
+      const jarNames = Object.keys(r.jars).sort();
+      const total = r.owners.size;
+      hint.textContent = pkg.noJars ? 'No .jar files found inside this zip.' : `${jarNames.length} jar${jarNames.length === 1 ? '' : 's'} · ${total} class${total === 1 ? '' : 'es'}`;
+      hint.classList.toggle('err', !!pkg.noJars);
+
+      const crossSet = new Set(cross.map(c => c.cls));
+      const dupSet = new Set(intra[i].map(c => c.cls));
+      jarsEl.replaceChildren();
+      for (const jar of jarNames) {
+        const classes = r.jars[jar];
+        const d = document.createElement('details');
+        d.className = 'jar';
+        d.open = jarNames.length <= 6;
+        const s = document.createElement('summary');
+        s.innerHTML = `<span class="jn"></span><span class="n"></span>`;
+        s.querySelector('.jn').textContent = jar;
+        s.querySelector('.n').textContent = classes ? classes.length : 'not a valid jar';
+        d.append(s);
+        const ul = document.createElement('ul');
+        if (classes) {
+          for (const c of classes) {
+            const li = document.createElement('li');
+            li.textContent = c;
+            if (crossSet.has(c)) li.classList.add('hit');
+            else if (dupSet.has(c)) li.classList.add('dup');
+            ul.append(li);
+          }
+        }
+        d.append(ul);
+        jarsEl.append(d);
+      }
+      list.hidden = false;
+      applyFilter(i);
+    });
+
+    // verdict + conflict detail
+    conflictsEl.replaceChildren();
+    const both = resolved[0] && resolved[1] && !slots[0].error && !slots[1].error;
+    verdict.className = 'verdict ' + (!both ? 'idle' : (cross.length || intra[0].length || intra[1].length) ? 'bad' : 'ok');
+    if (!both) {
+      verdictPill.textContent = 'Waiting';
+      verdictMsg.textContent = resolved[0] || resolved[1] ? 'Load the second package to compare.' : 'Load both packages to compare.';
+    } else if (cross.length === 0 && !intra[0].length && !intra[1].length) {
+      verdictPill.textContent = 'Compatible';
+      verdictMsg.textContent = `No class is implemented in both ${slots[0].name} and ${slots[1].name}.`;
+    } else {
+      verdictPill.textContent = 'Conflict';
+      const parts = [];
+      if (cross.length) parts.push(`${cross.length} class${cross.length === 1 ? ' is' : 'es are'} implemented in both packages`);
+      const intraTotal = intra[0].length + intra[1].length;
+      if (intraTotal) parts.push(`${intraTotal} class${intraTotal === 1 ? ' is' : 'es are'} implemented by two jars inside one package`);
+      verdictMsg.textContent = parts.join('; ') + '. Only one copy can load.';
+    }
+
+    if (cross.length) conflictsEl.append(group('cross', `Implemented in both packages`, cross.length,
+      cross.map(c => [c.cls, `${slots[0].name} → ${c.a.join(', ')}  |  ${slots[1].name} → ${c.b.join(', ')}`])));
+    intra.forEach((list, i) => {
+      if (list.length) conflictsEl.append(group('intra', `Duplicated inside ${slots[i].name}`, list.length,
+        list.map(c => [c.cls, c.jars.join(', ')])));
+    });
+    conflictsEl.hidden = conflictsEl.children.length === 0;
+  }
+
+  function group(kind, title, count, rows) {
+    const g = document.createElement('div');
+    g.className = 'conflict-group ' + kind;
+    const h = document.createElement('h2');
+    h.innerHTML = `<span></span><span class="count"></span>`;
+    h.firstChild.textContent = title;
+    h.lastChild.textContent = count;
+    g.append(h);
+    const ul = document.createElement('ul');
+    for (const [cls, where] of rows) {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="cls"></span><span class="where"></span>`;
+      li.firstChild.textContent = cls;
+      li.lastChild.textContent = where;
+      ul.append(li);
+    }
+    g.append(ul);
+    return g;
+  }
+
+  function applyFilter(i) {
+    const zone = zones[i];
+    const q = zone.querySelector('input[type=search]').value.trim().toLowerCase();
+    let shown = 0, total = 0;
+    zone.querySelectorAll('.jar').forEach(d => {
+      let jarShown = 0;
+      d.querySelectorAll('li').forEach(li => {
+        total++;
+        const hit = !q || li.textContent.toLowerCase().includes(q);
+        li.hidden = !hit;
+        if (hit) { shown++; jarShown++; }
+      });
+      d.hidden = q && jarShown === 0;
+      if (q && jarShown) d.open = true;
+    });
+    zone.querySelector('.list-head .n').textContent = q ? `${shown} of ${total}` : `${total} classes`;
+  }
+})();
+</script>
+
+</body></html>
