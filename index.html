@@ -127,7 +127,8 @@
       <label><input type="checkbox" id="opt-inner"> Treat inner classes (<span class="k">Foo$Bar</span>) separately</label>
     </div>
   </header>
-  <section class="verdict idle" id="verdict">
+
+    <section class="verdict idle" id="verdict">
     <span class="pill" id="verdict-pill">Waiting</span>
     <span class="msg" id="verdict-msg">Load both packages to compare.</span>
   </section>
@@ -163,7 +164,6 @@
 
   <p class="legend">
     <span><span class="k bad">✕</span> class or script present in both packages</span>
-    <span><span class="k warn">!</span> implemented by two jars in the same package</span>
   </p>
 </main>
 
@@ -276,11 +276,6 @@
       }
       cross.sort((x, y) => x.cls.localeCompare(y.cls));
     }
-    // intra-package conflicts
-    const intra = resolved.map(r => {
-      if (!r) return [];
-      return [...r.owners].filter(([, js]) => js.length > 1).map(([cls, js]) => ({ cls, jars: js })).sort((x, y) => x.cls.localeCompare(y.cls));
-    });
     // shell scripts present in both packages, matched by bare filename
     const scriptCross = [];
     if (slots[0] && slots[1]) {
@@ -309,7 +304,6 @@
       hint.classList.toggle('err', !!(pkg.noJars && !ns));
 
       const crossSet = new Set(cross.map(c => c.cls));
-      const dupSet = new Set(intra[i].map(c => c.cls));
       jarsEl.replaceChildren();
       for (const jar of jarNames) {
         const classes = r.jars[jar];
@@ -327,7 +321,6 @@
             const li = document.createElement('li');
             li.textContent = c;
             if (crossSet.has(c)) li.classList.add('hit');
-            else if (dupSet.has(c)) li.classList.add('dup');
             ul.append(li);
           }
         }
@@ -359,7 +352,7 @@
     // verdict + conflict detail
     conflictsEl.replaceChildren();
     const both = resolved[0] && resolved[1] && !slots[0].error && !slots[1].error;
-    const anyConflict = cross.length || scriptCross.length || intra[0].length || intra[1].length;
+    const anyConflict = cross.length || scriptCross.length;
     verdict.className = 'verdict ' + (!both ? 'idle' : anyConflict ? 'bad' : 'ok');
     if (!both) {
       verdictPill.textContent = 'Waiting';
@@ -372,8 +365,6 @@
       const parts = [];
       if (cross.length) parts.push(`${cross.length} class${cross.length === 1 ? ' is' : 'es are'} implemented in both packages`);
       if (scriptCross.length) parts.push(`${scriptCross.length} shell script${scriptCross.length === 1 ? ' is' : 's are'} present in both packages`);
-      const intraTotal = intra[0].length + intra[1].length;
-      if (intraTotal) parts.push(`${intraTotal} class${intraTotal === 1 ? ' is' : 'es are'} implemented by two jars inside one package`);
       verdictMsg.textContent = parts.join('; ') + '. Only one copy can be used.';
     }
 
@@ -381,10 +372,6 @@
       cross.map(c => [c.cls, `${slots[0].name} → ${c.a.join(', ')}  |  ${slots[1].name} → ${c.b.join(', ')}`])));
     if (scriptCross.length) conflictsEl.append(group('cross', `Shell scripts present in both packages`, scriptCross.length,
       scriptCross.map(s => [s.name, `${slots[0].name} → ${s.a.join(', ')}  |  ${slots[1].name} → ${s.b.join(', ')}`])));
-    intra.forEach((list, i) => {
-      if (list.length) conflictsEl.append(group('intra', `Duplicated inside ${slots[i].name}`, list.length,
-        list.map(c => [c.cls, c.jars.join(', ')])));
-    });
     conflictsEl.hidden = conflictsEl.children.length === 0;
   }
 
