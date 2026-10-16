@@ -127,7 +127,6 @@
       <label><input type="checkbox" id="opt-inner"> Treat inner classes (<span class="k">Foo$Bar</span>) separately</label>
     </div>
   </header>
-
   <section class="verdict idle" id="verdict">
     <span class="pill" id="verdict-pill">Waiting</span>
     <span class="msg" id="verdict-msg">Load both packages to compare.</span>
@@ -205,9 +204,9 @@
       const base = e.split('/').pop();
       if (!base || base.includes('.')) continue;
       const head = await f.async('uint8array');
-      if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) scripts.push(e);
+      if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) scripts.push({ name: base, path: e });
     }
-    scripts.sort();
+    scripts.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
     return { name: file.name, entries: jars, scripts, noJars: jarEntries.length === 0 };
   }
 
@@ -282,13 +281,15 @@
       if (!r) return [];
       return [...r.owners].filter(([, js]) => js.length > 1).map(([cls, js]) => ({ cls, jars: js })).sort((x, y) => x.cls.localeCompare(y.cls));
     });
-    // shell scripts present in both packages (same path inside the zip)
+    // shell scripts present in both packages, matched by bare filename
     const scriptCross = [];
     if (slots[0] && slots[1]) {
-      const b = new Set(slots[1].scripts);
-      for (const s of slots[0].scripts) if (b.has(s)) scriptCross.push(s);
+      const byName = ss => { const m = new Map(); for (const s of ss) { if (!m.has(s.name)) m.set(s.name, []); m.get(s.name).push(s.path); } return m; };
+      const a = byName(slots[0].scripts), b = byName(slots[1].scripts);
+      for (const [name, pa] of a) if (b.has(name)) scriptCross.push({ name, a: pa, b: b.get(name) });
+      scriptCross.sort((x, y) => x.name.localeCompare(y.name));
     }
-    const scriptCrossSet = new Set(scriptCross);
+    const scriptCrossSet = new Set(scriptCross.map(s => s.name));
 
     // per-package lists
     resolved.forEach((r, i) => {
@@ -344,8 +345,8 @@
         const ul = document.createElement('ul');
         for (const sc of pkg.scripts) {
           const li = document.createElement('li');
-          li.textContent = sc;
-          if (scriptCrossSet.has(sc)) li.classList.add('hit');
+          li.textContent = sc.path;
+          if (scriptCrossSet.has(sc.name)) li.classList.add('hit');
           ul.append(li);
         }
         d.append(ul);
@@ -379,7 +380,7 @@
     if (cross.length) conflictsEl.append(group('cross', `Classes implemented in both packages`, cross.length,
       cross.map(c => [c.cls, `${slots[0].name} → ${c.a.join(', ')}  |  ${slots[1].name} → ${c.b.join(', ')}`])));
     if (scriptCross.length) conflictsEl.append(group('cross', `Shell scripts present in both packages`, scriptCross.length,
-      scriptCross.map(s => [s, `${slots[0].name}  |  ${slots[1].name}`])));
+      scriptCross.map(s => [s.name, `${slots[0].name} → ${s.a.join(', ')}  |  ${slots[1].name} → ${s.b.join(', ')}`])));
     intra.forEach((list, i) => {
       if (list.length) conflictsEl.append(group('intra', `Duplicated inside ${slots[i].name}`, list.length,
         list.map(c => [c.cls, c.jars.join(', ')])));
