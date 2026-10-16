@@ -121,7 +121,7 @@
   <header>
     <div>
       <h1>Override Conflict Checker</h1>
-      <p class="lede">Drop an update zip (or a single jar) in each box. Every jar inside is opened right here in your browser and its classes are compared. Nothing is uploaded.</p>
+      <p class="lede">Drop an update zip (or a single jar) in each box. Every jar inside is opened right here in your browser and its classes are compared, along with any extensionless shell scripts (files starting with <span class="k">#!</span>). Nothing is uploaded.</p>
     </div>
     <div class="opts">
       <label><input type="checkbox" id="opt-inner"> Treat inner classes (<span class="k">Foo$Bar</span>) separately</label>
@@ -163,7 +163,7 @@
   </section>
 
   <p class="legend">
-    <span><span class="k bad">✕</span> implemented in both packages</span>
+    <span><span class="k bad">✕</span> class or script present in both packages</span>
     <span><span class="k warn">!</span> implemented by two jars in the same package</span>
   </p>
 </main>
@@ -186,7 +186,7 @@
     const jars = {};
     if (/\.jar$/i.test(file.name)) {
       jars[file.name] = Object.keys(outer.files).filter(e => !outer.files[e].dir);
-      return { name: file.name, entries: jars };
+      return { name: file.name, entries: jars, scripts: [] };
     }
     const jarEntries = Object.keys(outer.files).filter(e => !outer.files[e].dir && /\.jar$/i.test(e));
     for (const je of jarEntries) {
@@ -197,7 +197,18 @@
         jars[je] = null; // not a valid jar
       }
     }
-    return { name: file.name, entries: jars, noJars: jarEntries.length === 0 };
+    // Extensionless files that start with a shebang are shell scripts.
+    const scripts = [];
+    for (const e of Object.keys(outer.files)) {
+      const f = outer.files[e];
+      if (f.dir) continue;
+      const base = e.split('/').pop();
+      if (!base || base.includes('.')) continue;
+      const head = await f.async('uint8array');
+      if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) scripts.push(e);
+    }
+    scripts.sort();
+    return { name: file.name, entries: jars, scripts, noJars: jarEntries.length === 0 };
   }
 
   // Resolve raw entries into class sets under the current inner-class option.
@@ -249,7 +260,7 @@
     try {
       slots[i] = await readPackage(file);
     } catch (e) {
-      slots[i] = { name: file.name, entries: {}, error: 'Could not open this file as a zip archive.' };
+      slots[i] = { name: file.name, entries: {}, scripts: [], error: 'Could not open this file as a zip archive.' };
     }
     render();
   }
@@ -271,6 +282,13 @@
       if (!r) return [];
       return [...r.owners].filter(([, js]) => js.length > 1).map(([cls, js]) => ({ cls, jars: js })).sort((x, y) => x.cls.localeCompare(y.cls));
     });
+    // shell scripts present in both packages (same path inside the zip)
+    const scriptCross = [];
+    if (slots[0] && slots[1]) {
+      const b = new Set(slots[1].scripts);
+      for (const s of slots[0].scripts) if (b.has(s)) scriptCross.push(s);
+    }
+    const scriptCrossSet = new Set(scriptCross);
 
     // per-package lists
     resolved.forEach((r, i) => {
@@ -284,8 +302,10 @@
 
       const jarNames = Object.keys(r.jars).sort();
       const total = r.owners.size;
-      hint.textContent = pkg.noJars ? 'No .jar files found inside this zip.' : `${jarNames.length} jar${jarNames.length === 1 ? '' : 's'} · ${total} class${total === 1 ? '' : 'es'}`;
-      hint.classList.toggle('err', !!pkg.noJars);
+      const ns = pkg.scripts.length;
+      hint.textContent = pkg.noJars && !ns ? 'No .jar files or shell scripts found inside this zip.'
+        : `${jarNames.length} jar${jarNames.length === 1 ? '' : 's'} · ${total} class${total === 1 ? '' : 'es'} · ${ns} script${ns === 1 ? '' : 's'}`;
+      hint.classList.toggle('err', !!(pkg.noJars && !ns));
 
       const crossSet = new Set(cross.map(c => c.cls));
       const dupSet = new Set(intra[i].map(c => c.cls));
@@ -313,6 +333,24 @@
         d.append(ul);
         jarsEl.append(d);
       }
+      if (pkg.scripts.length) {
+        const d = document.createElement('details');
+        d.className = 'jar scripts';
+        d.open = true;
+        const s = document.createElement('summary');
+        s.innerHTML = `<span class="jn">shell scripts</span><span class="n"></span>`;
+        s.querySelector('.n').textContent = pkg.scripts.length;
+        d.append(s);
+        const ul = document.createElement('ul');
+        for (const sc of pkg.scripts) {
+          const li = document.createElement('li');
+          li.textContent = sc;
+          if (scriptCrossSet.has(sc)) li.classList.add('hit');
+          ul.append(li);
+        }
+        d.append(ul);
+        jarsEl.append(d);
+      }
       list.hidden = false;
       applyFilter(i);
     });
@@ -320,24 +358,28 @@
     // verdict + conflict detail
     conflictsEl.replaceChildren();
     const both = resolved[0] && resolved[1] && !slots[0].error && !slots[1].error;
-    verdict.className = 'verdict ' + (!both ? 'idle' : (cross.length || intra[0].length || intra[1].length) ? 'bad' : 'ok');
+    const anyConflict = cross.length || scriptCross.length || intra[0].length || intra[1].length;
+    verdict.className = 'verdict ' + (!both ? 'idle' : anyConflict ? 'bad' : 'ok');
     if (!both) {
       verdictPill.textContent = 'Waiting';
       verdictMsg.textContent = resolved[0] || resolved[1] ? 'Load the second package to compare.' : 'Load both packages to compare.';
-    } else if (cross.length === 0 && !intra[0].length && !intra[1].length) {
+    } else if (!anyConflict) {
       verdictPill.textContent = 'Compatible';
-      verdictMsg.textContent = `No class is implemented in both ${slots[0].name} and ${slots[1].name}.`;
+      verdictMsg.textContent = `No class or shell script is present in both ${slots[0].name} and ${slots[1].name}.`;
     } else {
-      verdictPill.textContent = 'Conflict';
+      verdictPill.textContent = 'Incompatible';
       const parts = [];
       if (cross.length) parts.push(`${cross.length} class${cross.length === 1 ? ' is' : 'es are'} implemented in both packages`);
+      if (scriptCross.length) parts.push(`${scriptCross.length} shell script${scriptCross.length === 1 ? ' is' : 's are'} present in both packages`);
       const intraTotal = intra[0].length + intra[1].length;
       if (intraTotal) parts.push(`${intraTotal} class${intraTotal === 1 ? ' is' : 'es are'} implemented by two jars inside one package`);
-      verdictMsg.textContent = parts.join('; ') + '. Only one copy can load.';
+      verdictMsg.textContent = parts.join('; ') + '. Only one copy can be used.';
     }
 
-    if (cross.length) conflictsEl.append(group('cross', `Implemented in both packages`, cross.length,
+    if (cross.length) conflictsEl.append(group('cross', `Classes implemented in both packages`, cross.length,
       cross.map(c => [c.cls, `${slots[0].name} → ${c.a.join(', ')}  |  ${slots[1].name} → ${c.b.join(', ')}`])));
+    if (scriptCross.length) conflictsEl.append(group('cross', `Shell scripts present in both packages`, scriptCross.length,
+      scriptCross.map(s => [s, `${slots[0].name}  |  ${slots[1].name}`])));
     intra.forEach((list, i) => {
       if (list.length) conflictsEl.append(group('intra', `Duplicated inside ${slots[i].name}`, list.length,
         list.map(c => [c.cls, c.jars.join(', ')])));
